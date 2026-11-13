@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ESP32-C3 BLE LED</title>
+<style>
+  body { font-family: -apple-system, sans-serif; text-align: center; margin: 10vh 16px; background: #fafafa; color: #222; }
+  h1 { font-size: 1.4em; }
+  button { font-size: 1.2em; padding: .7em 1.4em; margin: .3em; border: 0; border-radius: 12px; color: #fff; background: #0a7cff; }
+  button:disabled { background: #bbb; }
+  #led { width: 80px; height: 80px; border-radius: 50%; margin: 1.2em auto; background: #ccc; transition: background .1s; }
+  #led.on { background: #ffb300; box-shadow: 0 0 24px #ffb300; }
+  #msg { color: #666; min-height: 1.5em; }
+  .row { margin-top: .5em; }
+</style>
+</head>
+<body>
+<h1>ESP32-C3 BLE LED</h1>
+<button id="connect">連線藍牙</button>
+<div id="led"></div>
+<div id="msg">尚未連線</div>
+<div class="row">
+  <button class="cmd" data-v="1" disabled>開</button>
+  <button class="cmd" data-v="0" disabled>關</button>
+  <button class="cmd" data-v="2" disabled>閃爍</button>
+</div>
+
+<script>
+// 與韌體 main/ble_led.c 中的 UUID 一致
+const SVC   = 'c3e1d000-5a8b-4c2d-9f1e-2b7a3c4d5e60';
+const CTRL  = 'c3e1d001-5a8b-4c2d-9f1e-2b7a3c4d5e60';
+const STATE = 'c3e1d002-5a8b-4c2d-9f1e-2b7a3c4d5e60';
+
+const $ = s => document.querySelector(s);
+const cmds = document.querySelectorAll('.cmd');
+let device, ctrl;
+
+function setMsg(t) { $('#msg').textContent = t; }
+function setConnected(c) {
+  cmds.forEach(b => b.disabled = !c);
+  $('#connect').textContent = c ? '中斷連線' : '連線藍牙';
+  if (!c) $('#led').className = '';
+}
+
+function showState(dv) {
+  const on = dv.getUint8(0), blinking = dv.getUint8(1);
+  $('#led').className = on ? 'on' : '';
+  setMsg('已連線 · ' + (blinking ? '閃爍中' : (on ? '亮' : '滅')));
+}
+
+async function connect() {
+  if (!navigator.bluetooth) {
+    setMsg('此瀏覽器不支援 Web Bluetooth (iPhone 請用 Bluefy)');
+    return;
+  }
+  try {
+    setMsg('選擇裝置...');
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'ESP32-C3' }],
+      optionalServices: [SVC],
+    });
+    device.addEventListener('gattserverdisconnected', () => { setConnected(false); setMsg('已中斷連線'); });
+
+    setMsg('連線中...');
+    const server  = await device.gatt.connect();
+    const service = await server.getPrimaryService(SVC);
+    ctrl = await service.getCharacteristic(CTRL);
+    const state = await service.getCharacteristic(STATE);
+
+    state.addEventListener('characteristicvaluechanged', e => showState(e.target.value));
+    await state.startNotifications();
+    showState(await state.readValue());
+    setConnected(true);
+  } catch (e) {
+    setMsg('錯誤: ' + e.message);
+    setConnected(false);
+  }
+}
+
+$('#connect').onclick = () => {
+  if (device && device.gatt.connected) device.gatt.disconnect();
+  else connect();
+};
+
+cmds.forEach(b => b.onclick = async () => {
+  try {
+    await ctrl.writeValue(new Uint8Array([Number(b.dataset.v)]));
+  } catch (e) {
+    setMsg('寫入失敗: ' + e.message);
+  }
+});
+</script>
+</body>
+</html>
